@@ -8,6 +8,10 @@
 
 # Node
 /node_modules
+admin-server/node_modules/
+
+# Executables
+*.exe
 npm-debug.log
 yarn-error.log
 
@@ -41,3 +45,6 @@ __screenshots__/
 # System files
 .DS_Store
 Thumbs.db
+
+# Local Netlify folder
+.netlify

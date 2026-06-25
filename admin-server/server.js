@@ -90,6 +90,7 @@ app.delete('/api/links/:index', (req, res) => {
 function runDeploy(res) {
   const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const DIST_DIR = path.join(PROJECT_ROOT, 'dist', 'BeautyPicks', 'browser');
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -120,28 +121,57 @@ function runDeploy(res) {
     }
 
     send('log', '✅ Build succeeded!\n');
+
+    const redirectsPath = path.join(DIST_DIR, '_redirects');
+    fs.writeFileSync(redirectsPath, '/*    /index.html   200\n', 'utf-8');
+    send('log', '▶ Wrote _redirects for SPA routing\n');
+
     send('log', '▶ Deploying to Netlify...\n');
 
-    const deploy = spawn(npxCmd, ['netlify', 'deploy', '--prod'], {
+    const authToken = process.env.NETLIFY_AUTH_TOKEN;
+    const siteId = process.env.NETLIFY_SITE_ID;
+
+    if (!authToken) {
+      send('error', '✖ NETLIFY_AUTH_TOKEN not set. Set it before starting the admin server.\n');
+      send('result', { success: false });
+      res.end();
+      return;
+    }
+
+    if (!siteId) {
+      send('error', '✖ NETLIFY_SITE_ID not set. Set it before starting the admin server.\n');
+      send('result', { success: false });
+      res.end();
+      return;
+    }
+
+    const deploy = spawn(npxCmd, ['netlify', 'deploy', '--prod', '--dir', DIST_DIR, '--message', 'Deploy from admin panel'], {
       cwd: PROJECT_ROOT,
       shell: true,
       env: {
         ...process.env,
-        NETLIFY_AUTH_TOKEN: process.env.NETLIFY_AUTH_TOKEN || '',
-        NETLIFY_SITE_ID: process.env.NETLIFY_SITE_ID || '',
+        NETLIFY_AUTH_TOKEN: authToken,
+        NETLIFY_SITE_ID: siteId,
       },
     });
 
-    deploy.stdout.on('data', (data) => send('log', data.toString()));
+    let output = '';
+    deploy.stdout.on('data', (data) => {
+      const text = data.toString();
+      output += text;
+      send('log', text);
+    });
     deploy.stderr.on('data', (data) => send('log', data.toString()));
 
     deploy.on('close', (deployCode) => {
       if (deployCode !== 0) {
-        send('error', `✖ Deploy failed with code ${deployCode}`);
+        send('error', `✖ Deploy failed with code ${deployCode}\n`);
         send('result', { success: false });
       } else {
-        send('log', '✅ Deploy complete!\n');
-        send('result', { success: true });
+        const urlMatch = output.match(/Website URL:\s+(\S+)/);
+        const siteUrl = urlMatch ? urlMatch[1] : 'your Netlify site';
+        send('log', `✅ Deploy complete! Visit ${siteUrl}\n`);
+        send('result', { success: true, url: siteUrl });
       }
       res.end();
     });
@@ -242,7 +272,8 @@ const INDEX_HTML = `<!DOCTYPE html>
 <section id="deploy-section">
   <h2>Deploy</h2>
   <p style="color:#8b949e;font-size:0.875rem;margin-bottom:0.75rem;">
-    Saves current links, builds, and deploys to Netlify.
+    Builds the Angular app with optimizations and deploys to Netlify.
+    Requires <code style="color:#f0f6fc;">NETLIFY_AUTH_TOKEN</code> and <code style="color:#f0f6fc;">NETLIFY_SITE_ID</code> env vars set when starting the server.
   </p>
   <button id="btn-deploy" class="btn-deploy" onclick="doDeploy()">Deploy to Netlify</button>
   <div id="log-area" class="log-area"></div>

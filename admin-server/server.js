@@ -141,7 +141,21 @@ function runDeploy(res) {
 
     const redirectsPath = path.join(DIST_DIR, '_redirects');
     fs.writeFileSync(redirectsPath, '/*    /index.html   200\n', 'utf-8');
-    send('log', '▶ Wrote _redirects for SPA routing\n');
+    const headersPath = path.join(DIST_DIR, '_headers');
+    fs.writeFileSync(headersPath, [
+      '/*.js',
+      '  Cache-Control: public, max-age=31536000, immutable',
+      '/*.css',
+      '  Cache-Control: public, max-age=31536000, immutable',
+      '/*.svg',
+      '  Cache-Control: public, max-age=31536000, immutable',
+      '/skin-care.png',
+      '  Cache-Control: public, max-age=31536000, immutable',
+      '/index.html',
+      '  Cache-Control: public, max-age=0, must-revalidate',
+      '',
+    ].join('\n'), 'utf-8');
+    send('log', '▶ Wrote _redirects + _headers for routing and caching\n');
 
     send('log', '▶ Deploying to Netlify...\n');
 

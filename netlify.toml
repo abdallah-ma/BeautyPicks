@@ -1,7 +1,3 @@
-[build]
-  command = "npm run build:prod"
-  publish = "dist/BeautyPicks/browser"
-
 [[redirects]]
   from = "/*"
   to = "/index.html"

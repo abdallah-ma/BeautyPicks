@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const { spawn } = require('child_process');
 
 const app = express();
@@ -104,9 +105,46 @@ app.delete('/api/links/:index', (req, res) => {
   }
 });
 
+function apiRequest(method, path, headers, body) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: 'api.netlify.com',
+      port: 443,
+      path,
+      method,
+      headers,
+    };
+    const req = https.request(opts, (res) => {
+      let data = '';
+      res.on('data', (c) => data += c);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+        catch { resolve({ status: res.statusCode, data }); }
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+function collectFiles(dir) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files = {};
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const sub = collectFiles(fullPath);
+      for (const [k, v] of Object.entries(sub)) files[entry.name + '/' + k] = v;
+    } else {
+      files[entry.name] = fs.readFileSync(fullPath);
+    }
+  }
+  return files;
+}
+
 function runDeploy(res) {
   const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   const DIST_DIR = path.join(PROJECT_ROOT, 'dist', 'BeautyPicks', 'browser');
 
   res.writeHead(200, {
@@ -129,7 +167,7 @@ function runDeploy(res) {
   build.stdout.on('data', (data) => send('log', data.toString()));
   build.stderr.on('data', (data) => send('log', data.toString()));
 
-  build.on('close', (code) => {
+  build.on('close', async (code) => {
     if (code !== 0) {
       send('error', `✖ Build failed with code ${code}`);
       send('result', { success: false });
@@ -157,55 +195,51 @@ function runDeploy(res) {
     ].join('\n'), 'utf-8');
     send('log', '▶ Wrote _redirects + _headers for routing and caching\n');
 
-    send('log', '▶ Deploying to Netlify...\n');
+    send('log', '▶ Deploying to Netlify via API...\n');
 
     const authToken = deployAuthToken || process.env.NETLIFY_AUTH_TOKEN || '';
     const siteId = readNetlifyConfig() || process.env.NETLIFY_SITE_ID || '';
 
     if (!authToken) {
-      send('error', '✖ Netlify auth token missing. Enter it in the "Token" field above the deploy button.\n');
+      send('error', '✖ Netlify auth token missing.\n');
       send('result', { success: false });
       res.end();
       return;
     }
 
     if (!siteId) {
-      send('error', '✖ Site ID not found. Create .netlify/state.json or set NETLIFY_SITE_ID.\n');
+      send('error', '✖ Site ID not found.\n');
       send('result', { success: false });
       res.end();
       return;
     }
 
-    const deploy = spawn(npxCmd, ['netlify', 'deploy', '--prod', '--dir', DIST_DIR, '--message', 'Deploy from admin panel'], {
-      cwd: PROJECT_ROOT,
-      shell: true,
-      env: {
-        ...process.env,
-        NETLIFY_AUTH_TOKEN: authToken,
-        NETLIFY_SITE_ID: siteId,
-      },
-    });
+    try {
+      const rawFiles = collectFiles(DIST_DIR);
+      const files = {};
+      for (const [k, v] of Object.entries(rawFiles)) files[k] = v.toString('base64');
 
-    let output = '';
-    deploy.stdout.on('data', (data) => {
-      const text = data.toString();
-      output += text;
-      send('log', text);
-    });
-    deploy.stderr.on('data', (data) => send('log', data.toString()));
+      send('log', `▶ Uploading ${Object.keys(files).length} files...\n`);
 
-    deploy.on('close', (deployCode) => {
-      if (deployCode !== 0) {
-        send('error', `✖ Deploy failed with code ${deployCode}\n`);
-        send('result', { success: false });
+      const auth = `Bearer ${authToken}`;
+      const result = await apiRequest('POST', `/api/v1/sites/${siteId}/deploys?branch=main`, {
+        'Authorization': auth,
+        'Content-Type': 'application/json',
+      }, JSON.stringify({ files }));
+
+      if (result.status >= 200 && result.status < 300) {
+        const url = result.data.ssl_url || result.data.url || 'https://dynamic-youtiao-993735.netlify.app';
+        send('log', `✅ Deploy complete! Visit ${url}\n`);
+        send('result', { success: true, url });
       } else {
-        const urlMatch = output.match(/Website URL:\s+(\S+)/);
-        const siteUrl = urlMatch ? urlMatch[1] : 'your Netlify site';
-        send('log', `✅ Deploy complete! Visit ${siteUrl}\n`);
-        send('result', { success: true, url: siteUrl });
+        send('error', `✖ Deploy failed: ${JSON.stringify(result.data)}\n`);
+        send('result', { success: false });
       }
-      res.end();
-    });
+    } catch (e) {
+      send('error', `✖ Deploy error: ${e.message}\n`);
+      send('result', { success: false });
+    }
+    res.end();
   });
 }
 

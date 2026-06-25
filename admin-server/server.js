@@ -33,13 +33,13 @@ function readNetlifyConfig() {
   return null;
 }
 
+app.use(express.json());
+
 let deployAuthToken = '';
 app.post('/api/set-token', (req, res) => {
   deployAuthToken = req.body.token || '';
   res.json({ success: true });
 });
-
-app.use(express.json());
 
 function getLinks() {
   const content = fs.readFileSync(ENV_FILE, 'utf-8');

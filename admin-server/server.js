@@ -22,6 +22,23 @@ function findProjectRoot() {
 const PROJECT_ROOT = findProjectRoot();
 const ENV_FILE = path.join(PROJECT_ROOT, 'src', 'environment.ts');
 
+function readNetlifyConfig() {
+  const statePath = path.join(PROJECT_ROOT, '.netlify', 'state.json');
+  try {
+    if (fs.existsSync(statePath)) {
+      const data = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+      return data.siteId || null;
+    }
+  } catch {}
+  return null;
+}
+
+let deployAuthToken = '';
+app.post('/api/set-token', (req, res) => {
+  deployAuthToken = req.body.token || '';
+  res.json({ success: true });
+});
+
 app.use(express.json());
 
 function getLinks() {
@@ -128,18 +145,18 @@ function runDeploy(res) {
 
     send('log', '▶ Deploying to Netlify...\n');
 
-    const authToken = process.env.NETLIFY_AUTH_TOKEN;
-    const siteId = process.env.NETLIFY_SITE_ID;
+    const authToken = deployAuthToken || process.env.NETLIFY_AUTH_TOKEN || '';
+    const siteId = readNetlifyConfig() || process.env.NETLIFY_SITE_ID || '';
 
     if (!authToken) {
-      send('error', '✖ NETLIFY_AUTH_TOKEN not set. Set it before starting the admin server.\n');
+      send('error', '✖ Netlify auth token missing. Enter it in the "Token" field above the deploy button.\n');
       send('result', { success: false });
       res.end();
       return;
     }
 
     if (!siteId) {
-      send('error', '✖ NETLIFY_SITE_ID not set. Set it before starting the admin server.\n');
+      send('error', '✖ Site ID not found. Create .netlify/state.json or set NETLIFY_SITE_ID.\n');
       send('result', { success: false });
       res.end();
       return;
@@ -272,9 +289,12 @@ const INDEX_HTML = `<!DOCTYPE html>
 <section id="deploy-section">
   <h2>Deploy</h2>
   <p style="color:#8b949e;font-size:0.875rem;margin-bottom:0.75rem;">
-    Builds the Angular app with optimizations and deploys to Netlify.
-    Requires <code style="color:#f0f6fc;">NETLIFY_AUTH_TOKEN</code> and <code style="color:#f0f6fc;">NETLIFY_SITE_ID</code> env vars set when starting the server.
+    Builds, compresses, and deploys to Netlify.
   </p>
+  <div class="form-row" style="margin-bottom:0.75rem;">
+    <input id="input-token" type="password" placeholder="Netlify Personal Access Token" autocomplete="off" style="flex:1;min-width:300px;">
+    <button class="btn-primary" onclick="setToken()">Save Token</button>
+  </div>
   <button id="btn-deploy" class="btn-deploy" onclick="doDeploy()">Deploy to Netlify</button>
   <div id="log-area" class="log-area"></div>
 </section>
@@ -348,6 +368,23 @@ async function deleteLink(index) {
 }
 
 let deployActive = false;
+
+async function setToken() {
+  const token = document.getElementById('input-token').value.trim();
+  if (!token) { showToast('Enter a token', 'error'); return; }
+  try {
+    const res = await fetch('/api/set-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    if (!res.ok) throw new Error('Failed');
+    document.getElementById('input-token').value = '';
+    showToast('Token saved for this session', 'success');
+  } catch (e) {
+    showToast('Error saving token', 'error');
+  }
+}
 
 function doDeploy() {
   if (deployActive) return;
